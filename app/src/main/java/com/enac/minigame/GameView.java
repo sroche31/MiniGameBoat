@@ -2,6 +2,7 @@ package com.enac.minigame;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.view.MotionEvent;
@@ -9,35 +10,26 @@ import android.view.View;
 
 public class GameView extends View {
 
-    enum GameState {
-        START,
-        READY,
-        PLAYING,
-        TILT_HINT,
-        PAUSED,
-        SETTINGS,
-        HELP,
-        GAME_OVER
-    }
-    enum DeathCause {
-        KRAKEN,
-        ROCKS
-    }
-
+    // ---- Design values ----
     // Android Material Design recommendations
     private final int margin = 16;
-    private float radius = 40;
 
+    // ---- Global Game & Constants ----
     private GameState gameState = GameState.START;
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+
     private int screenWidth;
     private int screenHeight;
+
+    // ---- Sensors ----
+    private final TiltSensorManager tiltSensor;
+
+    // ---- Game objects ----
+    private final Boat boat;
 
     // ---- Game variables ----
     private float score;
     private int lives;
-    private float boatX;
-    private float boatY;
     private float boatSpeed;
     private boolean boatHasMoved;
     private float boatMoveDist;
@@ -50,14 +42,13 @@ public class GameView extends View {
     // ---- Loop ----
     public boolean isRunning;
 
-    // ---- Elements ----
+    // ---- Elements values ----
     private final RectF windProgressBar = new RectF();
     // Pause button ToDo
     // heart1 ToDo
     // heart2 ToDo
     private final RectF krakenProgressBar = new RectF();
     // Game Zone ToDo
-    // boatDisplay ToDo
     // bonus button ToDo
     // krakenDisplay ToDo
 
@@ -65,19 +56,28 @@ public class GameView extends View {
     public GameView(Context context) {
         super(context);
         bitmapPaint.setTextSize(60);
+        bitmapPaint.setColor(Color.rgb(255, 255, 255));
+        tiltSensor = new TiltSensorManager(context);
+        boat = new Boat(40);
         initVal();
     }
 
     private void initVal() {
+        // ToDo
         score = 0;
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        screenWidth = w;
+        screenHeight = h;
+        boat.reset(screenWidth, screenHeight);
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-
-        screenWidth = this.getWidth();
-        screenHeight = this.getHeight();
 
         // Game State
         switch (gameState) {
@@ -86,11 +86,13 @@ public class GameView extends View {
                 break;
             case READY:
                 // ToDo
+                // Waiting for user to blow wind
             case PLAYING:
                 drawGame(canvas);
                 break;
             case TILT_HINT:
                 // ToDo
+                // Display if the player didn't already moved
                 break;
             case PAUSED:
                 // ToDo
@@ -114,11 +116,13 @@ public class GameView extends View {
     private void drawStartScreen(Canvas canvas) {
         canvas.drawText("MINI-JEU", 100, 200, bitmapPaint);
         canvas.drawText("Toucher pour jouer", 100, 300, bitmapPaint);
+        invalidate();
     }
 
     private void drawGame(Canvas canvas) {
-        canvas.drawCircle(boatX, boatY, radius, bitmapPaint);
-//        canvas.drawLine(x, y, x + 200, y + 100, bitmapPaint);
+        // Draw boat simplified
+        boat.draw(canvas);
+        // Drow score
         canvas.drawText(String.valueOf(score), screenWidth / 2, screenHeight / 2, bitmapPaint);
         invalidate();
     }
@@ -130,7 +134,7 @@ public class GameView extends View {
     }
 
     private void update() {
-        // ToDo
+        boat.update(tiltSensor.getTilt(), screenWidth);
     }
 
     private final Runnable gameLoop = new Runnable() {
@@ -139,38 +143,37 @@ public class GameView extends View {
             update();
             invalidate();
             postDelayed(gameLoop, 16);
-
-            if ((boatX + radius > screenWidth || boatX - radius < 0) && gameState == gameState.PLAYING) {
-                removeCallbacks(this);
-                gameState = gameState.GAME_OVER;
-            }
         }
     };
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                switch (gameState) {
-                    case START:
-                        gameState = gameState.PLAYING;
-                        initVal();
-                        postDelayed(gameLoop, 16); // environ 60 mises à jour/s
-                        return true;
-                    case PLAYING:
-                        // ToDo
-                        return true;
-                    case GAME_OVER:
-                        gameState = gameState.START;
-                        return true;
-                }
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            switch (gameState) {
+                case START:
+                    gameState = gameState.PLAYING;
+                    initVal();
+                    postDelayed(gameLoop, 16); // environ 60 mises à jour/s
+                    return true;
+                case PLAYING:
+                    // ToDo
+                    removeCallbacks(gameLoop);
+                    gameState = gameState.GAME_OVER;
+                    return true;
+                case GAME_OVER:
+                    gameState = gameState.START;
+                    return true;
             }
+        }
         return true;
     }
 
     public void startGame() {
+        tiltSensor.start();
         post(gameLoop);
     }
     public void stopGame() {
+        tiltSensor.stop();
         removeCallbacks(gameLoop);
     }
 }
