@@ -5,19 +5,26 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 
 public class GameView extends View {
 
     // ---- Design values ----
-    // Android Material Design recommendations
-    private final int margin = 16;
+    // Android Material Design recommendations (en dp, convertis en px dans le constructeur)
+    private static final float MARGIN_DP = 16f;
+    private static final float TEXT_SIZE_SP = 20f;
+    private final float density;
+    private final float margin;
 
     // ---- Global Game & Constants ----
     private GameState gameState = GameState.START;
-    private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
-
+    private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private int screenWidth;
     private int screenHeight;
 
@@ -26,21 +33,20 @@ public class GameView extends View {
 
     // ---- Game objects ----
     private final Boat boat;
+    private final List<Rock> rocks = new ArrayList<>();
+
 
     // ---- Game variables ----
+    private float gameSpeed = 8f;           // == difficulté de base, qui augmente avec le temps
+    private static final int NB_ROCKS = 5;
+    private int rockSpacing;          // distance verticale entre deux rochers
+    private long startTime;
     private float score;
     private int lives;
-    private float boatSpeed;
     private boolean boatHasMoved;
     private float boatMoveDist;
     private float windCharge;
     private float krakenProgress;
-
-    // ---- Entry ----
-    private float boatTilt;
-
-    // ---- Loop ----
-    public boolean isRunning;
 
     // ---- Elements values ----
     private final RectF windProgressBar = new RectF();
@@ -55,16 +61,33 @@ public class GameView extends View {
 
     public GameView(Context context) {
         super(context);
-        bitmapPaint.setTextSize(60);
-        bitmapPaint.setColor(Color.rgb(255, 255, 255));
+        density = getResources().getDisplayMetrics().density;
+        margin = MARGIN_DP * density;
+        textPaint.setTextSize(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_SP, TEXT_SIZE_SP, getResources().getDisplayMetrics()));
+        textPaint.setColor(Color.rgb(255, 255, 255));
+        textPaint.setTextAlign(Paint.Align.CENTER);
         tiltSensor = new TiltSensorManager(context);
-        boat = new Boat(40);
+        boat = new Boat(density);
         initVal();
     }
 
+    private void initRocks() {
+        rocks.clear();
+        if (screenWidth == 0 || screenHeight == 0) return;
+        rockSpacing = screenHeight / NB_ROCKS;
+        for (int i = 0; i < NB_ROCKS; i++) {
+            rocks.add(new Rock(margin, screenWidth - margin, i * rockSpacing, density));
+        }
+    }
+
     private void initVal() {
-        // ToDo
+        // ToDo : To Complete
         score = 0;
+        lives = 2;
+        startTime = System.currentTimeMillis();
+        initRocks();
+        boat.reset(screenWidth, screenHeight);
     }
 
     @Override
@@ -72,7 +95,7 @@ public class GameView extends View {
         super.onSizeChanged(w, h, oldw, oldh);
         screenWidth = w;
         screenHeight = h;
-        boat.reset(screenWidth, screenHeight);
+        initRocks();
     }
 
     @Override
@@ -110,31 +133,50 @@ public class GameView extends View {
     }
 
     private void calcScore() {
-        // ToDo
+        score = (System.currentTimeMillis() - startTime) * gameSpeed / 10000;
+    }
+
+    private String formatScore() {
+        return String.format(Locale.getDefault(), "%.1f", score);
     }
 
     private void drawStartScreen(Canvas canvas) {
-        canvas.drawText("MINI-JEU", 100, 200, bitmapPaint);
-        canvas.drawText("Toucher pour jouer", 100, 300, bitmapPaint);
-        invalidate();
+        canvas.drawText("MINI-JEU", screenWidth / 2f, getPaddingTop() + 200, textPaint);
+        canvas.drawText("Toucher pour jouer", screenWidth / 2f, getPaddingTop() + 300, textPaint);
     }
 
     private void drawGame(Canvas canvas) {
-        // Draw boat simplified
+        for (Rock rock : rocks) {
+            rock.draw(canvas);
+        }
         boat.draw(canvas);
         // Drow score
-        canvas.drawText(String.valueOf(score), screenWidth / 2, screenHeight / 2, bitmapPaint);
-        invalidate();
+        canvas.drawText(formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
     }
 
     private void drawGameOver(Canvas canvas) {
-        canvas.drawText("GAME OVER", 100, 200, bitmapPaint);
-        canvas.drawText("Score : " + score, screenWidth / 2, screenHeight / 2, bitmapPaint);
-        invalidate();
+        canvas.drawText("GAME OVER", screenWidth / 2f, getPaddingTop() + 200, textPaint);
+        canvas.drawText("Score : " + formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
     }
 
     private void update() {
+        calcScore();
+
         boat.update(tiltSensor.getTilt(), screenWidth);
+
+        for (Rock rock : rocks) {
+            rock.update(gameSpeed, screenHeight);
+
+            if (rock.collidesWith(boat)) {
+                lives--;
+                rock.markHit();
+                boat.hit();
+                if (lives <= 0) {
+                    gameOver();
+                    return;
+                }
+            }
+        }
     }
 
     private final Runnable gameLoop = new Runnable() {
@@ -142,7 +184,9 @@ public class GameView extends View {
         public void run() {
             update();
             invalidate();
-            postDelayed(gameLoop, 16);
+            if (gameState == GameState.PLAYING) {
+                postDelayed(gameLoop, 16);
+            }
         }
     };
 
@@ -151,25 +195,29 @@ public class GameView extends View {
         if (event.getAction() == MotionEvent.ACTION_DOWN) {
             switch (gameState) {
                 case START:
-                    gameState = gameState.PLAYING;
+                    gameState = GameState.PLAYING;
                     initVal();
-                    postDelayed(gameLoop, 16); // environ 60 mises à jour/s
+                    startGame();
                     return true;
                 case PLAYING:
                     // ToDo
-                    removeCallbacks(gameLoop);
-                    gameState = gameState.GAME_OVER;
+                    gameOver();
                     return true;
                 case GAME_OVER:
-                    gameState = gameState.START;
+                    gameState = GameState.START;
                     return true;
             }
         }
         return true;
     }
-
+    private void gameOver() {
+        gameState = GameState.GAME_OVER;
+        invalidate();
+        stopGame();
+    }
     public void startGame() {
         tiltSensor.start();
+        removeCallbacks(gameLoop); // garde-fou
         post(gameLoop);
     }
     public void stopGame() {
