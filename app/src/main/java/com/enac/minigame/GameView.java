@@ -26,11 +26,12 @@ public class GameView extends View {
     private GameState gameState = GameState.START;
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private int screenWidth;
-    private int screenHeight;
 
     // ---- Sensors ----
     private final TiltSensorManager tiltSensor;
+    private final MicrophoneSensorManager micSensor;
 
+    private int screenHeight;
     // ---- Game objects ----
     private final Boat boat;
     private final List<Rock> rocks = new ArrayList<>();
@@ -68,6 +69,7 @@ public class GameView extends View {
         textPaint.setColor(Color.rgb(255, 255, 255));
         textPaint.setTextAlign(Paint.Align.CENTER);
         tiltSensor = new TiltSensorManager(context);
+        micSensor = new MicrophoneSensorManager(context);
         boat = new Boat(density);
         initVal();
     }
@@ -163,6 +165,10 @@ public class GameView extends View {
         calcScore();
 
         boat.update(tiltSensor.getTilt(), screenWidth);
+        boolean micTriggered = micSensor.consumeTrigger();
+        if (micTriggered) {
+            // ToDo : Utiliser le trigger du micro pour accélérer le jeu
+        }
 
         for (Rock rock : rocks) {
             rock.update(gameSpeed, screenHeight);
@@ -217,6 +223,7 @@ public class GameView extends View {
     }
     public void startGame() {
         tiltSensor.start();
+        micSensor.start();
         removeCallbacks(gameLoop); // garde-fou
         post(gameLoop);
     }
