@@ -8,8 +8,8 @@ import android.hardware.SensorManager;
 
 public class TiltSensorManager implements SensorEventListener {
 
-    private static final float DEFAULT_SENSITIVITY = 3.2f;
-    private static final float DEFAULT_DEAD_ZONE = 0.8f;
+    private static final float DEFAULT_SENSITIVITY = 0.8f;
+    private static final float DEFAULT_DEAD_ZONE = 1.2f;
     private float sensitivity;
     private float deadZone;
 

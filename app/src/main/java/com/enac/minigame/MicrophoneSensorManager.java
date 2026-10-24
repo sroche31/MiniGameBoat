@@ -38,14 +38,14 @@ public class MicrophoneSensorManager {
 
     // ---------- Réglages de détection par défaut ----------
 
-    // De combien de dB le son doit dépasser la moyenne pour déclencher (+6 dB ≈ 2x plus fort)
-    private static final float DEFAULT_TRIGGER_THRESHOLD_DB = 12f;
+    // De combien de dB le son doit dépasser la moyenne pour déclencher
+    private static final float DEFAULT_TRIGGER_THRESHOLD_DB = 25f;
     // Durée sur laquelle la moyenne "se souvient" du son
-    private static final float DEFAULT_AVERAGE_WINDOW_SECONDS = 3f;
+    private static final float DEFAULT_AVERAGE_WINDOW_SECONDS = 6f;
     // Délai minimum entre deux déclenchements
-    private static final long DEFAULT_COOLDOWN_MS = 300;
+    private static final long DEFAULT_COOLDOWN_MS = 6000;
     // Temps d'écoute au démarrage avant d'autoriser un déclenchement (la moyenne se stabilise)
-    private static final float WARMUP_SECONDS = 1f;
+    private static final float WARMUP_SECONDS = 6f;
     // Pour redéclencher, le delta doit d'abord redescendre sous (seuil x ce ratio)
     private static final float REARM_RATIO = 0.5f;
     // Pendant un son fort, la moyenne évolue X fois plus lentement (pour ne pas être faussée)

@@ -7,7 +7,7 @@ import android.graphics.Paint;
 import java.util.Random;
 
 public class Rock {
-    private static final float RADIUS_DP = 14f;
+    private static final float RADIUS_DP = 24f;
     private static final Random rand = new Random();
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);

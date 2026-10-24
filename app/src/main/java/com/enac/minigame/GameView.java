@@ -5,6 +5,8 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
@@ -19,6 +21,7 @@ public class GameView extends View {
     // Android Material Design recommendations (en dp, convertis en px dans le constructeur)
     private static final float MARGIN_DP = 16f;
     private static final float TEXT_SIZE_SP = 20f;
+    private static final long BOOST_DURATION_MS = 2500L;
     private final float density;
     private final float margin;
 
@@ -41,12 +44,10 @@ public class GameView extends View {
     private float gameSpeed = 8f;           // == difficulté de base, qui augmente avec le temps
     private static final int NB_ROCKS = 5;
     private int rockSpacing;          // distance verticale entre deux rochers
+    private long boostEndTime = 0;
     private long startTime;
     private float score;
     private int lives;
-    private boolean boatHasMoved;
-    private float boatMoveDist;
-    private float windCharge;
     private float krakenProgress;
 
     // ---- Elements values ----
@@ -86,8 +87,10 @@ public class GameView extends View {
     private void initVal() {
         // ToDo : To Complete
         score = 0;
+        gameSpeed = 8f;
         lives = 2;
         startTime = System.currentTimeMillis();
+        boostEndTime = 0;
         initRocks();
         boat.reset(screenWidth, screenHeight);
     }
@@ -103,6 +106,10 @@ public class GameView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+
+        // For now boost is visible by changing the background color
+        boolean boostActive = System.currentTimeMillis() < boostEndTime;
+        canvas.drawColor(boostActive ? Color.rgb(60, 60, 60) : Color.BLACK);
 
         // Game State
         switch (gameState) {
@@ -134,8 +141,12 @@ public class GameView extends View {
         }
     }
 
-    private void calcScore() {
-        score = (System.currentTimeMillis() - startTime) * gameSpeed / 10000;
+    private void updateGameValues() {
+        // up difficulty
+        gameSpeed += 0.002;
+
+        // up score
+        score += gameSpeed * 0.008;
     }
 
     private String formatScore() {
@@ -161,13 +172,38 @@ public class GameView extends View {
         canvas.drawText("Score : " + formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
     }
 
+    private void boost() {
+        float levelBoost;
+        // ToDo : Adjust ranges and boost values
+        if (gameSpeed < 15) {
+            levelBoost = 8;
+        } else if (gameSpeed < 25) {
+            levelBoost = 12;
+        } else {
+            levelBoost = 16;
+        }
+        gameSpeed += levelBoost;
+
+        final Handler handler = new Handler(Looper.getMainLooper());
+        for (int i = 0 ; i < 10 ; i++) {
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    gameSpeed -= (levelBoost / 10) ;
+                }
+            }, (BOOST_DURATION_MS / 10) * i);
+        }
+
+        boostEndTime = System.currentTimeMillis() + BOOST_DURATION_MS;
+    };
+
     private void update() {
-        calcScore();
+        updateGameValues();
 
         boat.update(tiltSensor.getTilt(), screenWidth);
         boolean micTriggered = micSensor.consumeTrigger();
         if (micTriggered) {
-            // ToDo : Utiliser le trigger du micro pour accélérer le jeu
+            boost();
         }
 
         for (Rock rock : rocks) {
@@ -183,6 +219,9 @@ public class GameView extends View {
                 }
             }
         }
+
+        // up difficulty
+        gameSpeed += 0.01;
     }
 
     private final Runnable gameLoop = new Runnable() {
@@ -223,7 +262,8 @@ public class GameView extends View {
     }
     public void startGame() {
         tiltSensor.start();
-        micSensor.start();
+        boolean micStarted = micSensor.start();
+        System.out.println("____________________ MICRO " + micStarted);
         removeCallbacks(gameLoop); // garde-fou
         post(gameLoop);
     }
