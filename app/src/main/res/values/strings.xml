@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">MiniGame</string>
+    <string name="pause_title">Pause</string>
+    <string name="pause_boost">Activation du boost</string>
+    <string name="pause_button">Bouton</string>
+    <string name="pause_mic">Micro</string>
+    <string name="pause_control">Contrôle du bateau</string>
+    <string name="pause_touch">Tactile</string>
+    <string name="pause_tilt">Tilt</string>
+    <string name="pause_resume">Continuer</string>
+    <string name="pause_quit">Abandonner</string>
 </resources>

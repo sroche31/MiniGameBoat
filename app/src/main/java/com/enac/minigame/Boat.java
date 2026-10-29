@@ -9,9 +9,10 @@ public class Boat {
     // ---- CONSTANTS ----
     private static final float WATER_DRAG = 0.98f;          // frottement de l'eau (1 = aucun, 0.9 = très freiné)
     private static final float MAX_BOAT_SPEED = 50f;
-    private static final long BLINK_DURATION = 1500;
-    private static final long BLINK_PHASE = BLINK_DURATION / 6; 
-    
+    private static final float FOLLOW_SMOOTHING = 0.2f;
+    private static final long BLINK_DURATION = 2000;
+    private static final long BLINK_PHASE = BLINK_DURATION / 6;
+
     private static final float RADIUS_DP = 24f;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -58,6 +59,11 @@ public class Boat {
             x = maxX;
             tiltSpeed = 0;
         }
+    }
+
+    public void follow(float targetX, int screenWidth) {
+        x += (targetX - x) * FOLLOW_SMOOTHING;
+        x = Math.max(radius, Math.min(screenWidth - radius, x));
     }
 
     public boolean isInvincible() {
