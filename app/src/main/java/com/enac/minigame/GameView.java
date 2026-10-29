@@ -28,6 +28,7 @@ public class GameView extends View {
     // ---- Global Game & Constants ----
     private GameState gameState = GameState.START;
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint krakenPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private int screenWidth;
 
     // ---- Sensors ----
@@ -48,9 +49,11 @@ public class GameView extends View {
     private long startTime;
     private float score;
     private int lives;
-    private float krakenProgress;
+    private float krakenProgress = 0f;
+    private DeathCause death = null;
 
     // ---- Elements values ----
+    private float topKrakenY;
     private final RectF windProgressBar = new RectF();
     // Pause button ToDo
     // heart1 ToDo
@@ -69,6 +72,7 @@ public class GameView extends View {
                 TypedValue.COMPLEX_UNIT_SP, TEXT_SIZE_SP, getResources().getDisplayMetrics()));
         textPaint.setColor(Color.rgb(255, 255, 255));
         textPaint.setTextAlign(Paint.Align.CENTER);
+        krakenPaint.setColor(Color.rgb(255, 0, 0));
         tiltSensor = new TiltSensorManager(context);
         micSensor = new MicrophoneSensorManager(context);
         boat = new Boat(density);
@@ -91,6 +95,9 @@ public class GameView extends View {
         lives = 2;
         startTime = System.currentTimeMillis();
         boostEndTime = 0;
+        krakenProgress = 0f;
+        topKrakenY = screenHeight;
+        death = null;
         initRocks();
         boat.reset(screenWidth, screenHeight);
     }
@@ -146,7 +153,12 @@ public class GameView extends View {
         gameSpeed += 0.002;
 
         // up score
-        score += gameSpeed * 0.008;
+        if (krakenProgress < 1.4f) {
+            score += gameSpeed * 0.008;
+        }
+
+        // kraken progress
+        krakenProgress += 0.002;
     }
 
     private String formatScore() {
@@ -165,10 +177,29 @@ public class GameView extends View {
         boat.draw(canvas);
         // Drow score
         canvas.drawText(formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
+        // Kraken rect
+        canvas.drawRect(0f, topKrakenY, screenWidth, (screenHeight + 50f), krakenPaint);
+
+
+        invalidate();
     }
 
     private void drawGameOver(Canvas canvas) {
+        String stringDeath = "Shipwreck caused by ";
+        switch (death) {
+            case ROCKS:
+                stringDeath += "rocks";
+                break;
+            case KRAKEN:
+                stringDeath += "the Kraken";
+                break;
+            case SUICIDE:
+                stringDeath += "yourself";
+                break;
+        };
+
         canvas.drawText("GAME OVER", screenWidth / 2f, getPaddingTop() + 200, textPaint);
+        canvas.drawText(stringDeath, screenWidth / 2f, screenHeight / 4f, textPaint);
         canvas.drawText("Score : " + formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
     }
 
@@ -195,6 +226,9 @@ public class GameView extends View {
         }
 
         boostEndTime = System.currentTimeMillis() + BOOST_DURATION_MS;
+
+        // Kraken is overtaken
+        krakenProgress -= 0.5f;
     };
 
     private void update() {
@@ -214,10 +248,26 @@ public class GameView extends View {
                 rock.markHit();
                 boat.hit();
                 if (lives <= 0) {
+                    death = DeathCause.ROCKS;
                     gameOver();
                     return;
                 }
             }
+        }
+
+        float target;
+        if (krakenProgress >= 1.4f) {
+            target = 0f; // kraken go on the boat when lose
+        } else if (krakenProgress >= 0.8f) {
+            target = screenHeight - 300f;
+        } else {
+            target = screenHeight;
+        }
+        topKrakenY += (target - topKrakenY) * 0.1f;
+
+        if (krakenProgress >= 1.46f) {
+            death = DeathCause.KRAKEN;
+            gameOver();
         }
 
         // up difficulty
@@ -246,6 +296,7 @@ public class GameView extends View {
                     return true;
                 case PLAYING:
                     // ToDo
+                    death = DeathCause.SUICIDE;
                     gameOver();
                     return true;
                 case GAME_OVER:
