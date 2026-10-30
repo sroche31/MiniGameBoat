@@ -3,11 +3,15 @@ package com.enac.minigame;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ImageDecoder;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.drawable.AnimatedImageDrawable;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -18,6 +22,7 @@ import androidx.core.app.ActivityCompat;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.materialswitch.MaterialSwitch;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -60,11 +65,21 @@ public class GameView extends View {
             ".....BRB.....",
             "......B......",
     };
+    private static final float TILT_HINT_THRESHOLD = 2f;
+    private static final float TUTO_SIZE = 0.6f;
+    private static final float BOOST_PULSE_SCALE = 0.2f;
+    private static final long BOOST_PULSE_PERIOD_MS = 1000L;
+    private static final long BOOST_TUTO_DELAY_MS = 3000L;
+    private static final String HAS_PLAYED_KEY = "hasPlayed";
+    private AnimatedImageDrawable tiltTutoGif;
+    private AnimatedImageDrawable micTutoGif;
+    private final Path tutoClip = new Path();
     private final float density;
     private final float margin;
 
     // ---- Global Game & Constants ----
     private GameState gameState = GameState.START;
+    private GameState stateBeforePause = GameState.PLAYING;
     private int screenWidth;
     private int screenHeight;
 
@@ -74,11 +89,17 @@ public class GameView extends View {
     private final Paint krakenBarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint windBarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint heartPaint = new Paint();
+    private final Paint popupPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint shadePaint = new Paint();
     private final Paint krakenPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     // ---- Sensors ----
     private final TiltSensorManager tiltSensor;
     private final MicrophoneSensorManager micSensor;
+
+    // ---- Saved data ----
+    private final SharedPreferences prefs;
+    private boolean hasPlayed;
 
     // ---- Game objects ----
     private final Boat boat;
@@ -99,6 +120,8 @@ public class GameView extends View {
     private boolean useMic = true;
     private boolean useTilt = true;
     private float fingerX;
+    private boolean tiltHintDone;
+    private long readyTime;
 
     // ---- Elements values ----
     private float topKrakenY;
@@ -123,12 +146,34 @@ public class GameView extends View {
         barPaint.setColor(Color.WHITE);
         barPaint.setStyle(Paint.Style.STROKE);
         barPaint.setStrokeWidth(2 * density);
+        popupPaint.setColor(Color.rgb(40, 40, 40));
+        shadePaint.setColor(Color.argb(160, 0, 0, 0));
         // Sensors
         tiltSensor = new TiltSensorManager(context);
         micSensor = new MicrophoneSensorManager(context);
+        // Saved data
+        prefs = context.getSharedPreferences("minigame", Context.MODE_PRIVATE);
+        hasPlayed = prefs.getBoolean(HAS_PLAYED_KEY, false);
         // Init
         boat = new Boat(density);
         initVal();
+        // Load tutorials
+        new Thread(() -> {
+            try {
+                AnimatedImageDrawable tiltGif = (AnimatedImageDrawable) ImageDecoder.decodeDrawable(
+                        ImageDecoder.createSource(getResources(), R.drawable.phone_tilt_tuto));
+                AnimatedImageDrawable micGif = (AnimatedImageDrawable) ImageDecoder.decodeDrawable(
+                        ImageDecoder.createSource(getResources(), R.drawable.mic_blow_tuto));
+                post(() -> {
+                    tiltTutoGif = tiltGif;
+                    micTutoGif = micGif;
+                    tiltTutoGif.start();
+                    micTutoGif.start();
+                });
+            } catch (IOException e) {
+                System.out.println("TutoGif ERROR " + e);
+            }
+        }).start();
     }
 
     private void initVal() {
@@ -142,6 +187,7 @@ public class GameView extends View {
         topKrakenY = screenHeight;
         death = null;
         fingerX = screenWidth / 2f;
+        tiltHintDone = false;
         initRocks();
         boat.reset(screenWidth, screenHeight);
     }
@@ -153,6 +199,7 @@ public class GameView extends View {
         for (int i = 0; i < NB_ROCKS; i++) {
             rocks.add(new Rock(margin, screenWidth - margin, i * rockSpacing, density));
         }
+        rocks.get(0).centerOn(screenWidth / 2f);
     }
 
     @Override
@@ -179,15 +226,34 @@ public class GameView extends View {
     private final Runnable gameLoop = new Runnable() {
         @Override
         public void run() {
-            update();
-            invalidate();
             if (gameState == GameState.PLAYING) {
+                update();
+            } else if (gameState == GameState.READY) {
+                if (micSensor.consumeTrigger()) {
+                    launch();
+                }
+            } else if (Math.abs(tiltSensor.getTilt()) > TILT_HINT_THRESHOLD) {
+                tiltHintDone = true;
+                gameState = GameState.PLAYING;
+            }
+            invalidate();
+            if (gameState == GameState.PLAYING || gameState == GameState.READY
+                    || gameState == GameState.TILT_HINT) {
                 postDelayed(gameLoop, FRAME_DELAY_MS);
             }
         }
     };
 
     private void update() {
+        Rock firstRock = rocks.get(0);
+        if (Math.abs(boat.getX() - screenWidth / 2f) > boat.getRadius()) {
+            tiltHintDone = true;
+        }
+        if (!tiltHintDone && boat.getY() - firstRock.getY() < boat.getRadius() + 3 * firstRock.getRadius()) {
+            gameState = GameState.TILT_HINT;
+            return;
+        }
+
         updateGameValues();
 
         if (useTilt) {
@@ -195,7 +261,7 @@ public class GameView extends View {
         } else {
             boat.follow(fingerX, screenWidth);
         }
-        if (micSensor.consumeTrigger()) {
+        if (micSensor.consumeTrigger() && boostReady()) {
             boost();
         }
 
@@ -278,8 +344,21 @@ public class GameView extends View {
         return boostCharge() >= 1f;
     }
 
+    private void launch() {
+        boost();
+        gameState = GameState.PLAYING;
+        hasPlayed = true;
+        prefs.edit().putBoolean(HAS_PLAYED_KEY, true).apply();
+    }
+
+    private boolean boostTutoVisible() {
+        return !hasPlayed || System.currentTimeMillis() - readyTime > BOOST_TUTO_DELAY_MS;
+    }
+
     public void pause() {
-        if (gameState != GameState.PLAYING) return;
+        if (gameState != GameState.PLAYING && gameState != GameState.READY
+                && gameState != GameState.TILT_HINT) return;
+        stateBeforePause = gameState;
         gameState = GameState.PAUSED;
         stopGame();
         invalidate();
@@ -316,7 +395,7 @@ public class GameView extends View {
     }
 
     private void resume() {
-        gameState = GameState.PLAYING;
+        gameState = stateBeforePause;
         fingerX = boat.getX();
         startGame();
     }
@@ -333,9 +412,6 @@ public class GameView extends View {
             tiltSensor.start();
         }
         useMic = useMic && micSensor.start();
-        if (useMic) {
-            boostChargeStart = System.currentTimeMillis();
-        }
         System.out.println("____________________ MICRO " + useMic);
         removeCallbacks(gameLoop); // safety
         post(gameLoop);
@@ -355,6 +431,26 @@ public class GameView extends View {
         float y = event.getY(index);
         boolean down = action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN;
 
+        if (gameState == GameState.READY) {
+            if (down && pauseButton.contains(x, y)) {
+                pause();
+            } else if (down && !useMic && boostButton.contains(x, y)) {
+                launch();
+            }
+            return true;
+        }
+
+        if (gameState == GameState.TILT_HINT && down) {
+            if (pauseButton.contains(x, y)) {
+                pause();
+                return true;
+            }
+            if (!useTilt) {
+                tiltHintDone = true;
+                gameState = GameState.PLAYING;
+            }
+        }
+
         if (gameState == GameState.PLAYING) {
             if (pauseButton.contains(x, y)) {
                 if (down) {
@@ -373,7 +469,8 @@ public class GameView extends View {
         if (down) {
             switch (gameState) {
                 case START:
-                    gameState = GameState.PLAYING;
+                    gameState = GameState.READY;
+                    readyTime = System.currentTimeMillis();
                     initVal();
                     startGame();
                     return true;
@@ -400,15 +497,32 @@ public class GameView extends View {
                 drawStartScreen(canvas);
                 break;
             case READY:
-                // ToDo
                 // Waiting for user to blow wind
+                drawGame(canvas);
+                if (!boostTutoVisible()) break;
+                canvas.drawRect(0, 0, screenWidth, screenHeight, shadePaint);
+                if (useMic) {
+                    drawGifTuto(canvas, micTutoGif);
+                } else {
+                    drawTextTuto(canvas, "Cliquer sur le bouton de boost", "pour avancer");
+                    drawBoostButton(canvas, boostPulse());
+                }
+                drawPauseButton(canvas);
+                break;
             case PLAYING:
             case PAUSED:
                 drawGame(canvas);
                 break;
             case TILT_HINT:
-                // ToDo
                 // Display if the player didn't already moved
+                drawGame(canvas);
+                canvas.drawRect(0, 0, screenWidth, screenHeight, shadePaint);
+                if (useTilt) {
+                    drawGifTuto(canvas, tiltTutoGif);
+                } else {
+                    drawTextTuto(canvas, "Glisser le doigt pour diriger");
+                }
+                drawPauseButton(canvas);
                 break;
             case SETTINGS:
                 // ToDo
@@ -436,10 +550,47 @@ public class GameView extends View {
         drawWindBar(canvas);
         // Draw score
         canvas.drawText(formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
-        drawButtons(canvas);
+        drawPauseButton(canvas);
+        drawBoostButton(canvas, 1f);
         drawHearts(canvas);
         // Kraken rect
         canvas.drawRect(0f, topKrakenY, screenWidth, screenHeight, krakenPaint);
+    }
+
+    private void drawGifTuto(Canvas canvas, AnimatedImageDrawable gif) {
+        if (gif == null) return;
+        int size = (int) (screenWidth * TUTO_SIZE);
+        int left = (screenWidth - size) / 2;
+        int top = (screenHeight - size) / 2;
+        gif.setBounds(left, top, left + size, top + size);
+        tutoClip.reset();
+        tutoClip.addRoundRect(left, top, left + size, top + size, margin, margin, Path.Direction.CW);
+        canvas.save();
+        canvas.clipPath(tutoClip);
+        gif.draw(canvas);
+        canvas.restore();
+        canvas.drawRoundRect(left, top, left + size, top + size, margin, margin, barPaint);
+    }
+
+    private void drawTextTuto(Canvas canvas, String... lines) {
+        float lineHeight = textPaint.descent() - textPaint.ascent();
+        float textWidth = 0;
+        for (String line : lines) {
+            textWidth = Math.max(textWidth, textPaint.measureText(line));
+        }
+        float halfWidth = textWidth / 2 + margin;
+        float halfHeight = lines.length * lineHeight / 2 + margin;
+        float cx = screenWidth / 2f;
+        float cy = screenHeight / 2f;
+        canvas.drawRoundRect(cx - halfWidth, cy - halfHeight, cx + halfWidth, cy + halfHeight,
+                margin, margin, popupPaint);
+        canvas.drawRoundRect(cx - halfWidth, cy - halfHeight, cx + halfWidth, cy + halfHeight,
+                margin, margin, barPaint);
+        float y = cy - lines.length * lineHeight / 2 - textPaint.ascent();
+        for (String line : lines) {
+            canvas.drawText(line, cx, y, textPaint);
+            y += lineHeight;
+        }
     }
 
     private void drawKrakenBar(Canvas canvas) {
@@ -463,17 +614,24 @@ public class GameView extends View {
         canvas.drawText("BOOST", bar.centerX(), textY, textPaint);
     }
 
-    private void drawButtons(Canvas canvas) {
+    private void drawPauseButton(Canvas canvas) {
         float barWidth = pauseButton.width() / 3;
         canvas.drawRect(pauseButton.left, pauseButton.top,
                 pauseButton.left + barWidth, pauseButton.bottom, textPaint);
         canvas.drawRect(pauseButton.right - barWidth, pauseButton.top,
                 pauseButton.right, pauseButton.bottom, textPaint);
+    }
 
+    private void drawBoostButton(Canvas canvas, float scale) {
         if (!useMic) {
-            canvas.drawCircle(boostButton.centerX(), boostButton.centerY(), boostButton.width() / 2,
+            canvas.drawCircle(boostButton.centerX(), boostButton.centerY(), boostButton.width() / 2 * scale,
                     boostReady() ? textPaint : barPaint);
         }
+    }
+
+    private float boostPulse() {
+        double phase = 2 * Math.PI * (System.currentTimeMillis() % BOOST_PULSE_PERIOD_MS) / BOOST_PULSE_PERIOD_MS;
+        return 1f + BOOST_PULSE_SCALE * (1 - (float) Math.cos(phase)) / 2;
     }
 
     private void drawHearts(Canvas canvas) {

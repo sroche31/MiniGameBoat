@@ -30,6 +30,12 @@ public class Rock {
 
     public void reset() { reset(0); }
 
+    public void centerOn(float x) { this.x = x; }
+
+    public float getY() { return y; }
+
+    public float getRadius() { return radius; }
+
     public void reset(int gap) {
         float minDisplay = startScene + radius;
         float maxDisplay = endScene - radius;

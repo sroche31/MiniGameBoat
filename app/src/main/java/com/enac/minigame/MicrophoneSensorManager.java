@@ -45,7 +45,7 @@ public class MicrophoneSensorManager {
     // Délai minimum entre deux déclenchements
     private static final long DEFAULT_COOLDOWN_MS = 6000;
     // Temps d'écoute au démarrage avant d'autoriser un déclenchement (la moyenne se stabilise)
-    private static final float WARMUP_SECONDS = 6f;
+    private static final float WARMUP_SECONDS = 1f;
     // Pour redéclencher, le delta doit d'abord redescendre sous (seuil x ce ratio)
     private static final float REARM_RATIO = 0.5f;
     // Pendant un son fort, la moyenne évolue X fois plus lentement (pour ne pas être faussée)
