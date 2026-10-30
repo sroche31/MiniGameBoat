@@ -1,7 +1,5 @@
 package com.enac.minigame;
 
-import android.Manifest;
-import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -12,12 +10,12 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.drawable.AnimatedImageDrawable;
+import android.os.SystemClock;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
-
-import androidx.core.app.ActivityCompat;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.materialswitch.MaterialSwitch;
@@ -34,7 +32,10 @@ public class GameView extends View {
     private static final float MARGIN_DP = 16f;
     private static final float TEXT_SIZE_SP = 20f;
     private static final long BOOST_DURATION_MS = 2500L;
-    private static final float GAMESPEED_PROGRESSION = 0.012f;
+    private static final long BOOST_COOLDOWN_MS = 6000L;
+    private static final long BRAKE_DURATION_MS = 1000L;
+    private static final float BRAKE_FACTOR = 0.15f;
+    private static final float GAMESPEED_PROGRESSION = 0.007f;
     private static final int KRAKEN_APPEAR = 560;
     private static final int KRAKEN_GO = 780;
     private static final int KRAKEN_DEATH = 850;
@@ -45,12 +46,18 @@ public class GameView extends View {
     private static final float KRAKEN_BAR_TOP = 0.35f;
     private static final float KRAKEN_BAR_BOTTOM = 0.8f;
     private static final long FRAME_DELAY_MS = 16L;
+    // Speeds are in px/frame for a screen of this height (px), then scaled to the real screen height
+    private static final float REFERENCE_SCREEN_HEIGHT = 2400f;
     private static final float START_SPEED = 8f;
+    private static final float MAX_SPEED = 46.5f;
+    private static final float HIT_SPEED_LOSS = 0.1f;
+    private static final float START_SPACING_FACTOR = 1.6f;
+    private static final float MIN_X_GAP_RATIO = 0.75f;
+    private static final int MAX_ROCKS_AWAY_FROM_BOAT = 4;
     private static final int START_LIVES = 2;
     private static final float SCORE_FACTOR = 0.008f;
     private static final float PAUSE_BUTTON_SIZE_DP = 36f;
     private static final float BOOST_BUTTON_SIZE_DP = 56f;
-    private static final int MIC_PERMISSION_REQUEST_CODE = 1;
     private static final float HEART_PIXEL_DP = 3f;
     private static final String[] HEART = {
             "..BBB...BBB..",
@@ -66,14 +73,15 @@ public class GameView extends View {
             "......B......",
     };
     private static final float TILT_HINT_THRESHOLD = 2f;
-    private static final float TUTO_SIZE = 0.6f;
+    private static final float TUTORIAL_SIZE = 0.6f;
     private static final float BOOST_PULSE_SCALE = 0.2f;
     private static final long BOOST_PULSE_PERIOD_MS = 1000L;
-    private static final long BOOST_TUTO_DELAY_MS = 3000L;
+    private static final long BOOST_TUTORIAL_DELAY_MS = 3000L;
     private static final String HAS_PLAYED_KEY = "hasPlayed";
-    private AnimatedImageDrawable tiltTutoGif;
-    private AnimatedImageDrawable micTutoGif;
-    private final Path tutoClip = new Path();
+    private static final String BEST_SCORE_KEY = "bestScore";
+    private AnimatedImageDrawable tiltTutorialGif;
+    private AnimatedImageDrawable micTutorialGif;
+    private final Path tutorialClip = new Path();
     private final float density;
     private final float margin;
 
@@ -96,10 +104,12 @@ public class GameView extends View {
     // ---- Sensors ----
     private final TiltSensorManager tiltSensor;
     private final MicrophoneSensorManager micSensor;
+    private final Runnable requestMicPermission;
 
     // ---- Saved data ----
     private final SharedPreferences prefs;
     private boolean hasPlayed;
+    private float bestScore;
 
     // ---- Game objects ----
     private final Boat boat;
@@ -121,20 +131,26 @@ public class GameView extends View {
     private boolean useTilt = true;
     private float fingerX;
     private boolean tiltHintDone;
+    private float lastRockX;
+    private int rocksAwayFromBoat;
     private long readyTime;
+    private long gameTime;      // ms, only advances while PLAYING
+    private long lastFrameTime;
+    private float speedScale = 1f;
 
     // ---- Elements values ----
     private float topKrakenY;
     private final RectF windProgressBar = new RectF();
     private final RectF pauseButton = new RectF();
     private final RectF krakenProgressBar = new RectF();
-    // Game Zone ToDo
+    private final RectF gameZone = new RectF();
     private final RectF boostButton = new RectF();
     // krakenDisplay ToDo
 
 
-    public GameView(Context context) {
+    public GameView(Context context, Runnable requestMicPermission) {
         super(context);
+        this.requestMicPermission = requestMicPermission;
         density = getResources().getDisplayMetrics().density;
         margin = MARGIN_DP * density;
         // Paints
@@ -151,9 +167,11 @@ public class GameView extends View {
         // Sensors
         tiltSensor = new TiltSensorManager(context);
         micSensor = new MicrophoneSensorManager(context);
+        micSensor.setCooldownMs(0); // the boost cooldown is handled by the game (boostCharge)
         // Saved data
         prefs = context.getSharedPreferences("minigame", Context.MODE_PRIVATE);
         hasPlayed = prefs.getBoolean(HAS_PLAYED_KEY, false);
+        bestScore = prefs.getFloat(BEST_SCORE_KEY, 0f);
         // Init
         boat = new Boat(density);
         initVal();
@@ -161,17 +179,15 @@ public class GameView extends View {
         new Thread(() -> {
             try {
                 AnimatedImageDrawable tiltGif = (AnimatedImageDrawable) ImageDecoder.decodeDrawable(
-                        ImageDecoder.createSource(getResources(), R.drawable.phone_tilt_tuto));
+                        ImageDecoder.createSource(getResources(), R.raw.phone_tilt_tutorial));
                 AnimatedImageDrawable micGif = (AnimatedImageDrawable) ImageDecoder.decodeDrawable(
-                        ImageDecoder.createSource(getResources(), R.drawable.mic_blow_tuto));
+                        ImageDecoder.createSource(getResources(), R.raw.mic_blow_tutorial));
                 post(() -> {
-                    tiltTutoGif = tiltGif;
-                    micTutoGif = micGif;
-                    tiltTutoGif.start();
-                    micTutoGif.start();
+                    tiltTutorialGif = tiltGif;
+                    micTutorialGif = micGif;
                 });
             } catch (IOException e) {
-                System.out.println("TutoGif ERROR " + e);
+                Log.w("GameView", "Tutorial GIF loading failed", e);
             }
         }).start();
     }
@@ -182,24 +198,60 @@ public class GameView extends View {
         lives = START_LIVES;
         startTime = System.currentTimeMillis();
         boostEndTime = 0;
-        boostChargeStart = 0;
+        gameTime = 0;
+        boostChargeStart = -BOOST_COOLDOWN_MS; // boost ready at start
         krakenProgress = 0;
         topKrakenY = screenHeight;
         death = null;
-        fingerX = screenWidth / 2f;
+        fingerX = gameZone.centerX();
         tiltHintDone = false;
+        boat.reset(gameZone);
         initRocks();
-        boat.reset(screenWidth, screenHeight);
     }
 
     private void initRocks() {
         rocks.clear();
         if (screenWidth == 0 || screenHeight == 0) return;
-        int rockSpacing = screenHeight / NB_ROCKS;          // vertical distance between two rocks
         for (int i = 0; i < NB_ROCKS; i++) {
-            rocks.add(new Rock(margin, screenWidth - margin, i * rockSpacing, density));
+            rocks.add(new Rock(gameZone.left, gameZone.right, (int) (i * rockSpacing(START_SPEED)), density));
         }
-        rocks.get(0).centerOn(screenWidth / 2f);
+        rocks.get(0).centerOn(gameZone.centerX());
+        lastRockX = gameZone.centerX();
+        rocksAwayFromBoat = 0;
+        for (int i = 1; i < NB_ROCKS; i++) {
+            placeRock(rocks.get(i));
+        }
+    }
+
+    private void placeRock(Rock rock) {
+        float min = gameZone.left + rock.getRadius();
+        float max = gameZone.right - rock.getRadius();
+        float x;
+        if (rocksAwayFromBoat >= MAX_ROCKS_AWAY_FROM_BOAT) {
+            x = Math.max(min, Math.min(max, boat.getX()));
+        } else {
+            do {
+                x = min + (float) Math.random() * (max - min);
+            } while (Math.abs(x - lastRockX) < MIN_X_GAP_RATIO * 2 * rock.getRadius());
+        }
+        boolean nearBoat = Math.abs(x - boat.getX()) < rock.getRadius() + boat.getRadius();
+        rocksAwayFromBoat = nearBoat ? 0 : rocksAwayFromBoat + 1;
+        lastRockX = x;
+        rock.centerOn(x);
+    }
+
+    // vertical distance between two rocks : x START_SPACING_FACTOR at START_SPEED, x1 at MAX_SPEED
+    private float rockSpacing(float speed) {
+        float ratio = Math.min(1f, Math.max(0f, (speed - START_SPEED) / (MAX_SPEED - START_SPEED)));
+        return (float) screenHeight / NB_ROCKS * (1 + (START_SPACING_FACTOR - 1) * (1 - ratio));
+    }
+
+    private float topRockY() {
+        float top = 0;
+        for (Rock rock : rocks) {
+            top = Math.min(top, rock.getY());
+        }
+        return top;
     }
 
     @Override
@@ -207,8 +259,10 @@ public class GameView extends View {
         super.onSizeChanged(w, h, oldw, oldh);
         screenWidth = w;
         screenHeight = h;
+        speedScale = h / REFERENCE_SCREEN_HEIGHT;
         krakenProgressBar.set(margin, h * KRAKEN_BAR_TOP,
                 margin + KRAKEN_BAR_WIDTH_DP * density, h * KRAKEN_BAR_BOTTOM);
+        gameZone.set(krakenProgressBar.right + margin, 0, w, h);
 
         float right = w - getPaddingRight() - margin;
         float pauseSize = PAUSE_BUTTON_SIZE_DP * density;
@@ -220,13 +274,17 @@ public class GameView extends View {
         float boostBottom = h - KRAKEN_VISIBLE_HEIGHT_DP * density - margin;
         boostButton.set(right - boostSize, boostBottom - boostSize, right, boostBottom);
 
-        initRocks();
+        if (gameState == GameState.START || gameState == GameState.GAME_OVER) {
+            initRocks();
+        }
     }
 
     private final Runnable gameLoop = new Runnable() {
         @Override
         public void run() {
+            long now = SystemClock.uptimeMillis();
             if (gameState == GameState.PLAYING) {
+                gameTime += now - lastFrameTime;
                 update();
             } else if (gameState == GameState.READY) {
                 if (micSensor.consumeTrigger()) {
@@ -236,6 +294,7 @@ public class GameView extends View {
                 tiltHintDone = true;
                 gameState = GameState.PLAYING;
             }
+            lastFrameTime = now;
             invalidate();
             if (gameState == GameState.PLAYING || gameState == GameState.READY
                     || gameState == GameState.TILT_HINT) {
@@ -246,7 +305,7 @@ public class GameView extends View {
 
     private void update() {
         Rock firstRock = rocks.get(0);
-        if (Math.abs(boat.getX() - screenWidth / 2f) > boat.getRadius()) {
+        if (Math.abs(boat.getX() - gameZone.centerX()) > boat.getRadius()) {
             tiltHintDone = true;
         }
         if (!tiltHintDone && boat.getY() - firstRock.getY() < boat.getRadius() + 3 * firstRock.getRadius()) {
@@ -257,21 +316,26 @@ public class GameView extends View {
         updateGameValues();
 
         if (useTilt) {
-            boat.update(tiltSensor.getTilt(), screenWidth);
+            boat.update(tiltSensor.getTilt(), gameZone, speedScale);
         } else {
-            boat.follow(fingerX, screenWidth);
+            boat.follow(fingerX, gameZone);
         }
         if (micSensor.consumeTrigger() && boostReady()) {
             boost();
         }
 
+        float speed = currentSpeed() * speedScale;
         for (Rock rock : rocks) {
-            rock.update(currentSpeed(), screenHeight);
+            if (rock.update(speed, screenHeight, topRockY() - rockSpacing(gameSpeed))) {
+                placeRock(rock);
+            }
 
             if (rock.collidesWith(boat)) {
                 lives--;
                 rock.markHit();
                 boat.hit();
+                boat.bounceFrom(rock.getX());
+                gameSpeed = Math.max(START_SPEED, gameSpeed * (1 - HIT_SPEED_LOSS));
                 if (lives <= 0) {
                     death = DeathCause.ROCKS;
                     gameOver();
@@ -299,7 +363,7 @@ public class GameView extends View {
 
     private void updateGameValues() {
         // up difficulty
-        gameSpeed += GAMESPEED_PROGRESSION;
+        gameSpeed = Math.min(gameSpeed + GAMESPEED_PROGRESSION, MAX_SPEED);
 
         // up score
         if (krakenProgress < KRAKEN_GO) {
@@ -311,9 +375,14 @@ public class GameView extends View {
     }
 
     private float currentSpeed() {
-        long remaining = boostEndTime - System.currentTimeMillis();
-        if (remaining <= 0) return gameSpeed;
-        return gameSpeed + boostSpeed * remaining / BOOST_DURATION_MS;
+        long remaining = boostEndTime - gameTime;
+        if (remaining > 0) return gameSpeed + boostSpeed;
+        if (remaining > -BRAKE_DURATION_MS) {
+            float t = (float) -remaining / BRAKE_DURATION_MS;
+            return gameSpeed + boostSpeed * (1 - t) * (1 - t)
+                    - gameSpeed * BRAKE_FACTOR * (float) Math.sin(Math.PI * t);
+        }
+        return gameSpeed;
     }
 
     private void boost() {
@@ -328,8 +397,8 @@ public class GameView extends View {
             boostSpeed = 16;
         }
 
-        boostEndTime = System.currentTimeMillis() + BOOST_DURATION_MS;
-        boostChargeStart = System.currentTimeMillis();
+        boostEndTime = gameTime + BOOST_DURATION_MS;
+        boostChargeStart = gameTime;
 
         // Kraken is overtaken
         krakenProgress -= KRAKEN_BOOST_SETBACK;
@@ -337,7 +406,7 @@ public class GameView extends View {
     }
 
     private float boostCharge() {
-        return Math.min(1f, (float) (System.currentTimeMillis() - boostChargeStart) / micSensor.getCooldownMs());
+        return Math.min(1f, (float) (gameTime - boostChargeStart) / BOOST_COOLDOWN_MS);
     }
 
     private boolean boostReady() {
@@ -351,8 +420,8 @@ public class GameView extends View {
         prefs.edit().putBoolean(HAS_PLAYED_KEY, true).apply();
     }
 
-    private boolean boostTutoVisible() {
-        return !hasPlayed || System.currentTimeMillis() - readyTime > BOOST_TUTO_DELAY_MS;
+    private boolean boostTutorialVisible() {
+        return !hasPlayed || System.currentTimeMillis() - readyTime > BOOST_TUTORIAL_DELAY_MS;
     }
 
     public void pause() {
@@ -373,8 +442,7 @@ public class GameView extends View {
 
         micSwitch.setOnCheckedChangeListener((button, isChecked) -> {
             if (isChecked && !micSensor.isAvailable()) {
-                ActivityCompat.requestPermissions((Activity) getContext(),
-                        new String[]{Manifest.permission.RECORD_AUDIO}, MIC_PERMISSION_REQUEST_CODE);
+                requestMicPermission.run();
             }
         });
 
@@ -401,6 +469,10 @@ public class GameView extends View {
     }
 
     private void gameOver() {
+        if (score > bestScore) {
+            bestScore = score;
+            prefs.edit().putFloat(BEST_SCORE_KEY, bestScore).apply();
+        }
         gameState = GameState.GAME_OVER;
         invalidate();
         stopGame();
@@ -412,7 +484,7 @@ public class GameView extends View {
             tiltSensor.start();
         }
         useMic = useMic && micSensor.start();
-        System.out.println("____________________ MICRO " + useMic);
+        lastFrameTime = SystemClock.uptimeMillis(); // the pause duration is not counted in gameTime
         removeCallbacks(gameLoop); // safety
         post(gameLoop);
     }
@@ -421,6 +493,14 @@ public class GameView extends View {
         tiltSensor.stop();
         micSensor.stop();
         removeCallbacks(gameLoop);
+        if (tiltTutorialGif != null) tiltTutorialGif.stop();
+        if (micTutorialGif != null) micTutorialGif.stop();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        stopGame();
+        super.onDetachedFromWindow();
     }
 
     @Override
@@ -488,7 +568,7 @@ public class GameView extends View {
         super.onDraw(canvas);
 
         // For now boost is visible by changing the background color
-        boolean boostActive = System.currentTimeMillis() < boostEndTime;
+        boolean boostActive = gameTime < boostEndTime;
         canvas.drawColor(boostActive ? Color.rgb(60, 60, 60) : Color.BLACK);
 
         // Game State
@@ -499,12 +579,12 @@ public class GameView extends View {
             case READY:
                 // Waiting for user to blow wind
                 drawGame(canvas);
-                if (!boostTutoVisible()) break;
+                if (!boostTutorialVisible()) break;
                 canvas.drawRect(0, 0, screenWidth, screenHeight, shadePaint);
                 if (useMic) {
-                    drawGifTuto(canvas, micTutoGif);
+                    drawGifTutorial(canvas, micTutorialGif);
                 } else {
-                    drawTextTuto(canvas, "Cliquer sur le bouton de boost", "pour avancer");
+                    drawTextTutorial(canvas, "Cliquer sur le bouton de boost", "pour avancer");
                     drawBoostButton(canvas, boostPulse());
                 }
                 drawPauseButton(canvas);
@@ -518,9 +598,9 @@ public class GameView extends View {
                 drawGame(canvas);
                 canvas.drawRect(0, 0, screenWidth, screenHeight, shadePaint);
                 if (useTilt) {
-                    drawGifTuto(canvas, tiltTutoGif);
+                    drawGifTutorial(canvas, tiltTutorialGif);
                 } else {
-                    drawTextTuto(canvas, "Glisser le doigt pour diriger");
+                    drawTextTutorial(canvas, "Glisser le doigt pour diriger");
                 }
                 drawPauseButton(canvas);
                 break;
@@ -549,7 +629,7 @@ public class GameView extends View {
         drawKrakenBar(canvas);
         drawWindBar(canvas);
         // Draw score
-        canvas.drawText(formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
+        canvas.drawText(formatScore(score), screenWidth / 2f, screenHeight / 2f, textPaint);
         drawPauseButton(canvas);
         drawBoostButton(canvas, 1f);
         drawHearts(canvas);
@@ -557,22 +637,23 @@ public class GameView extends View {
         canvas.drawRect(0f, topKrakenY, screenWidth, screenHeight, krakenPaint);
     }
 
-    private void drawGifTuto(Canvas canvas, AnimatedImageDrawable gif) {
+    private void drawGifTutorial(Canvas canvas, AnimatedImageDrawable gif) {
         if (gif == null) return;
-        int size = (int) (screenWidth * TUTO_SIZE);
+        if (!gif.isRunning()) gif.start();
+        int size = (int) (screenWidth * TUTORIAL_SIZE);
         int left = (screenWidth - size) / 2;
         int top = (screenHeight - size) / 2;
         gif.setBounds(left, top, left + size, top + size);
-        tutoClip.reset();
-        tutoClip.addRoundRect(left, top, left + size, top + size, margin, margin, Path.Direction.CW);
+        tutorialClip.reset();
+        tutorialClip.addRoundRect(left, top, left + size, top + size, margin, margin, Path.Direction.CW);
         canvas.save();
-        canvas.clipPath(tutoClip);
+        canvas.clipPath(tutorialClip);
         gif.draw(canvas);
         canvas.restore();
         canvas.drawRoundRect(left, top, left + size, top + size, margin, margin, barPaint);
     }
 
-    private void drawTextTuto(Canvas canvas, String... lines) {
+    private void drawTextTutorial(Canvas canvas, String... lines) {
         float lineHeight = textPaint.descent() - textPaint.ascent();
         float textWidth = 0;
         for (String line : lines) {
@@ -659,25 +740,29 @@ public class GameView extends View {
 
     private void drawGameOver(Canvas canvas) {
         String stringDeath = "Naufrage causé par ";
-        switch (death) {
-            case ROCKS:
-                stringDeath += "les rochers";
-                break;
-            case KRAKEN:
-                stringDeath += "le Kraken";
-                break;
-            case SUICIDE:
-                stringDeath += "vous-même";
-                break;
-        }
+        if (death != null) {
+            switch (death) {
+                case ROCKS:
+                    stringDeath += "les rochers";
+                    break;
+                case KRAKEN:
+                    stringDeath += "le Kraken";
+                    break;
+                case SUICIDE:
+                    stringDeath += "vous-même";
+                    break;
+            }
+        } else { stringDeath += "un naufrage"; }
 
         canvas.drawText("GAME OVER", screenWidth / 2f, getPaddingTop() + 200, textPaint);
         canvas.drawText(stringDeath, screenWidth / 2f, screenHeight / 4f, textPaint);
-        canvas.drawText("Score : " + formatScore(), screenWidth / 2f, screenHeight / 2f, textPaint);
+        canvas.drawText("Score : " + formatScore(score), screenWidth / 2f, screenHeight / 2f, textPaint);
+        canvas.drawText("Meilleur score : " + formatScore(bestScore), screenWidth / 2f,
+                screenHeight / 2f + 2 * textPaint.getTextSize(), textPaint);
         canvas.drawText("Toucher l'écran pour recommencer", screenWidth / 2f, screenHeight * 3 / 4f, textPaint);
     }
 
-    private String formatScore() {
-        return String.format(Locale.getDefault(), "%.1f", score);
+    private String formatScore(float value) {
+        return String.format(Locale.getDefault(), "%.1f", value);
     }
 }

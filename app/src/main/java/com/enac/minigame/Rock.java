@@ -7,7 +7,7 @@ import android.graphics.Paint;
 import java.util.Random;
 
 public class Rock {
-    private static final float RADIUS_DP = 24f;
+    private static final float RADIUS_DP = 30f;
     private static final Random rand = new Random();
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -32,6 +32,8 @@ public class Rock {
 
     public void centerOn(float x) { this.x = x; }
 
+    public float getX() { return x; }
+
     public float getY() { return y; }
 
     public float getRadius() { return radius; }
@@ -45,11 +47,14 @@ public class Rock {
         paint.setAlpha(255); // redevient opaque
     }
 
-    public void update(float gameSpeed, float screenHeight) {
+    public boolean update(float gameSpeed, float screenHeight, float spawnY) {
         y += gameSpeed;
         if (y - radius > screenHeight) {
             reset(); // il réapparaît en haut à une nouvelle position
+            y = Math.min(y, spawnY);
+            return true;
         }
+        return false;
     }
 
     public boolean collidesWith(Boat boat) {

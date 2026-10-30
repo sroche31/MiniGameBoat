@@ -3,6 +3,7 @@ package com.enac.minigame;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 
 public class Boat {
 
@@ -10,6 +11,7 @@ public class Boat {
     private static final float WATER_DRAG = 0.98f;          // frottement de l'eau (1 = aucun, 0.9 = très freiné)
     private static final float MAX_BOAT_SPEED = 50f;
     private static final float FOLLOW_SMOOTHING = 0.2f;
+    private static final float BOUNCE = 0.15f;
     private static final long BLINK_DURATION = 2000;
     private static final long BLINK_PHASE = BLINK_DURATION / 6;
 
@@ -28,9 +30,9 @@ public class Boat {
         paint.setColor(Color.rgb(255, 0, 0));
     }
 
-    public void reset(int screenWidth, int screenHeight) {
-        x = screenWidth / 2f;
-        y = screenHeight * 0.75f;
+    public void reset(RectF zone) {
+        x = zone.centerX();
+        y = zone.height() * 0.75f;
         tiltSpeed = 0f;
         hitTime = -BLINK_DURATION;
     }
@@ -39,7 +41,7 @@ public class Boat {
         hitTime = System.currentTimeMillis();
     }
 
-    public void update(float tilt, int screenWidth) {
+    public void update(float tilt, RectF zone, float scale) {
         // L'inclinaison modifie la vitesse, pas directement la position
         tiltSpeed += tilt;
         // L'eau freine le bateau un peu à chaque frame
@@ -47,23 +49,30 @@ public class Boat {
 
         tiltSpeed = Math.max(-MAX_BOAT_SPEED, Math.min(MAX_BOAT_SPEED, tiltSpeed));
 
-        x -= tiltSpeed;
+        x -= tiltSpeed * scale; // scale : adapte la vitesse à la hauteur de l'écran
 
-        // Le bateau s'arrête contre le bord
-        float minX = radius;
-        float maxX = screenWidth - radius;
+        // Le bateau rebondit contre le bord
+        float minX = zone.left + radius;
+        float maxX = zone.right - radius;
         if (x < minX) {
             x = minX;
-            tiltSpeed = 0;
+            tiltSpeed = -tiltSpeed * BOUNCE;
         } else if (x > maxX) {
             x = maxX;
-            tiltSpeed = 0;
+            tiltSpeed = -tiltSpeed * BOUNCE;
         }
     }
 
-    public void follow(float targetX, int screenWidth) {
+    public void follow(float targetX, RectF zone) {
         x += (targetX - x) * FOLLOW_SMOOTHING;
-        x = Math.max(radius, Math.min(screenWidth - radius, x));
+        x = Math.max(zone.left + radius, Math.min(zone.right - radius, x));
+    }
+
+    public void bounceFrom(float obstacleX) {
+        // Rebondit seulement s'il allait vers l'obstacle (tiltSpeed > 0 = vers la gauche)
+        if ((obstacleX < x) == (tiltSpeed > 0)) {
+            tiltSpeed = -tiltSpeed * BOUNCE;
+        }
     }
 
     public boolean isInvincible() {

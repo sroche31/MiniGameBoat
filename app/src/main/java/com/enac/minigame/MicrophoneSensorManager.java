@@ -46,6 +46,10 @@ public class MicrophoneSensorManager {
     private static final long DEFAULT_COOLDOWN_MS = 6000;
     // Temps d'écoute au démarrage avant d'autoriser un déclenchement (la moyenne se stabilise)
     private static final float WARMUP_SECONDS = 1f;
+    // Volume minimum absolu pour déclencher (un souffle dans le micro est très fort, la TV non)
+    private static final float MIN_TRIGGER_DB = -20f;
+    // Nombre de mesures fortes d'affilée pour déclencher (4 x 23 ms ≈ 90 ms : ignore les bruits brefs)
+    private static final int MIN_LOUD_BLOCKS = 4;
     // Pour redéclencher, le delta doit d'abord redescendre sous (seuil x ce ratio)
     private static final float REARM_RATIO = 0.5f;
     // Pendant un son fort, la moyenne évolue X fois plus lentement (pour ne pas être faussée)
@@ -76,6 +80,7 @@ public class MicrophoneSensorManager {
     private boolean averageInitialized = false;
     private float listeningSeconds = 0f;
     private boolean armed = true;
+    private int loudBlocks = 0;
     private long lastTriggerTimeMs = 0;
     private final AtomicBoolean triggerPending = new AtomicBoolean(false);
 
@@ -207,7 +212,7 @@ public class MicrophoneSensorManager {
             float delta = soundDb - averageDb;
             listeningSeconds += BLOCK_DURATION_SECONDS;
 
-            checkForTrigger(delta);
+            checkForTrigger(soundDb, delta);
             updateAverage(soundDb, delta);
 
             currentDb = soundDb;
@@ -233,7 +238,7 @@ public class MicrophoneSensorManager {
     }
 
     /** Signale un déclenchement si le son dépasse la moyenne du seuil choisi. */
-    private void checkForTrigger(float delta) {
+    private void checkForTrigger(float soundDb, float delta) {
         boolean stillWarmingUp = listeningSeconds < WARMUP_SECONDS;
         if (stillWarmingUp) {
             return;
@@ -250,10 +255,14 @@ public class MicrophoneSensorManager {
         long now = SystemClock.elapsedRealtime();
         boolean cooldownOver = now - lastTriggerTimeMs >= cooldownMs;
 
-        if (delta > triggerThresholdDb && cooldownOver) {
+        boolean loud = delta > triggerThresholdDb && soundDb > MIN_TRIGGER_DB;
+        loudBlocks = loud ? loudBlocks + 1 : 0;
+
+        if (loudBlocks >= MIN_LOUD_BLOCKS && cooldownOver) {
             triggerPending.set(true);
             armed = false;
             lastTriggerTimeMs = now;
+            loudBlocks = 0;
         }
     }
 
@@ -282,6 +291,7 @@ public class MicrophoneSensorManager {
         averageInitialized = false;
         listeningSeconds = 0f;
         armed = true;
+        loudBlocks = 0;
         lastTriggerTimeMs = 0;
         triggerPending.set(false);
     }

@@ -9,4 +9,5 @@
     <string name="pause_tilt">Tilt</string>
     <string name="pause_resume">Continuer</string>
     <string name="pause_quit">Abandonner</string>
+    <string name="mic_denied">Micro refusé : le boost se fera avec le bouton</string>
 </resources>
