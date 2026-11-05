@@ -17,7 +17,7 @@ public class Rock {
     private boolean hit = false;
 
     public Rock(float startScene, float endScene, int gap, float density) {
-        paint.setColor(Color.rgb(255, 225, 0));
+        paint.setColor(Color.rgb(60, 60, 60));
         this.radius = RADIUS_DP * density;
         this.startScene = startScene;
         this.endScene = endScene;

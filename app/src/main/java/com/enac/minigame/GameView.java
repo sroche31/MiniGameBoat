@@ -569,7 +569,8 @@ public class GameView extends View {
 
         // For now boost is visible by changing the background color
         boolean boostActive = gameTime < boostEndTime;
-        canvas.drawColor(boostActive ? Color.rgb(60, 60, 60) : Color.BLACK);
+        //canvas.drawColor(boostActive ? Color.rgb(60, 60, 60) : Color.BLACK);
+        canvas.drawColor(boostActive ? Color.rgb(10, 100, 255) : Color.rgb(30, 144, 255));
 
         // Game State
         switch (gameState) {
